@@ -1,9 +1,9 @@
 name: Build APK
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, master]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,29 +14,43 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: subosito/flutter-action@v2
         with:
-          gradle-version: 8.2
+          channel: stable
+          cache: true
 
       - name: Unzip project
         run: |
-          mkdir -p proj
-          unzip -o GroceryApp.zip -d proj
-          find proj -maxdepth 4 -not -path '*/.*'
+          mkdir proj
+          for z in *.zip; do unzip -q -o "$z" -d proj; done
+          PUB=$(find proj -name pubspec.yaml | head -n 1)
+          if [ -z "$PUB" ]; then echo "pubspec.yaml not found"; exit 1; fi
+          echo "PROJ=$(dirname "$PUB")" >> "$GITHUB_ENV"
+
+      - name: Generate Android project
+        working-directory: ${{ env.PROJ }}
+        run: |
+          mkdir /tmp/keep
+          cp pubspec.yaml /tmp/keep/
+          cp -r lib /tmp/keep/lib
+          flutter create --platforms=android --org com.grocery --project-name grocery_app .
+          cp /tmp/keep/pubspec.yaml pubspec.yaml
+          rm -rf lib test
+          cp -r /tmp/keep/lib lib
+
+      - name: Configure Android
+        working-directory: ${{ env.PROJ }}
+        run: python3 tools/patch_android.py
 
       - name: Build APK
+        working-directory: ${{ env.PROJ }}
         run: |
-          SETTINGS=$(find proj -name settings.gradle.kts | head -n 1)
-          if [ -z "$SETTINGS" ]; then
-            echo "settings.gradle.kts not found"
-            exit 1
-          fi
-          cd "$(dirname "$SETTINGS")"
-          gradle assembleDebug --no-daemon
+          flutter pub get
+          flutter build apk --release --build-number=$((10 + GITHUB_RUN_NUMBER)) --build-name=1.${GITHUB_RUN_NUMBER}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: GroceryApp-debug
-          path: proj/**/build/outputs/apk/debug/*.apk
+          name: GroceryApp-APK
+          path: ${{ env.PROJ }}/build/app/outputs/flutter-apk/app-release.apk
